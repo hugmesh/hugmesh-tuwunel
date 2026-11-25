@@ -1,0 +1,28 @@
+server:
+  port: 8080
+  shutdown: graceful
+  forward-headers-strategy: none
+
+spring:
+  application:
+    name: hugmesh-tuwunel-web
+  codec:
+    max-in-memory-size: 1MB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# Everything is environment-driven: HUGMESH_WEB_AKKOMA_URL, HUGMESH_WEB_PUBLIC_URL, HUGMESH_WEB_UI_DIR, ...
+hugmesh:
+  web:
+    homeserver-url: ${HUGMESH_WEB_HOMESERVER_URL:http://tuwunel:8008}
+    public-url: ${HUGMESH_WEB_PUBLIC_URL:http://localhost:8080}
+    ui-dir: ${HUGMESH_WEB_UI_DIR:/app/ui}
+    state-dir: ${HUGMESH_WEB_STATE_DIR:/var/lib/hugmesh-web}

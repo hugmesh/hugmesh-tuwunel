@@ -1,0 +1,112 @@
+# hugmesh-tuwunel as a Tor ONION SERVICE ONLY: the Tuwunel homeserver + the web front door, reachable at an address this stack
+# mints for itself (a v3 .onion) and nowhere else. Nothing is published on the host, the application network has no route to the
+# internet, and federation is off.
+#
+#   cp .env.onion.example .env         # a registration token; there is NO host name to choose
+#   docker compose -f docker-compose.onion.yml up -d --build
+#   ./onion-address.sh                 # prints http://<56 characters>.onion  (open it in Tor Browser)
+#   ./register-user.sh alice docker-compose.onion.yml
+#
+# How it works: the `tor` service creates the onion key on first start (kept in the `tor-private` volume, so the address survives
+# restarts and upgrades; DELETE that volume and you get a new address) and copies only the public hostname into `onion-public`.
+# The homeserver reads it at start and uses it as its Matrix server name, so accounts look like @alice:<address>.onion. THE
+# SERVER NAME IS THE ADDRESS: lose the key volume and the accounts' names are lost with it. Back up `tor-private`.
+#
+# Limits, deliberately: no federation (a Matrix server needs TLS and DNS to federate, which an onion has neither of) and no URL
+# previews. It is a private server for the people who have its address.
+name: hugmesh-tuwunel-onion
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  # volumes are created root-owned; hand them to the uids that write to them
+  onion-perms:
+    build: {context: ../onion}
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 1000:1000 /var/lib/tor-hs /onion-public && chmod 0700 /var/lib/tor-hs && chmod 0755 /onion-public"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    network_mode: none
+    volumes:
+      - tor-private:/var/lib/tor-hs
+      - onion-public:/onion-public
+
+  data-perms:
+    image: ${TUWUNEL_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel:beta}
+    user: "0:0"
+    entrypoint: ["chown", "1000:1000", "/var/lib/tuwunel"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    network_mode: none
+    volumes: [data:/var/lib/tuwunel]
+
+  tor:
+    build: {context: ../onion}
+    <<: *hardening
+    restart: unless-stopped
+    # on the internal network (to reach the web service) AND on the one network that has a route out (to reach Tor)
+    networks: [backend, egress]
+    environment:
+      ONION_TARGET: web:8080
+    volumes:
+      - tor-private:/var/lib/tor-hs
+      - onion-public:/onion-public
+    depends_on:
+      onion-perms: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /onion-public/hostname"]
+      interval: 3s
+      timeout: 2s
+      retries: 60
+
+  tuwunel:
+    image: ${TUWUNEL_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel:beta}
+    <<: *hardening
+    restart: unless-stopped
+    networks: [backend]
+    # the server name IS the onion address, known only once tor has minted it
+    entrypoint: ["sh", "-c", "TUWUNEL_SERVER_NAME=\"$$(cat /onion/hostname)\" exec \"$$@\"", "--"]
+    command: ["/usr/local/bin/tuwunel"]
+    environment:
+      TUWUNEL_ALLOW_REGISTRATION: "true"
+      TUWUNEL_REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:?set REGISTRATION_TOKEN in .env}
+      TUWUNEL_ALLOW_FEDERATION: "false"
+    volumes:
+      - data:/var/lib/tuwunel
+      - onion-public:/onion:ro
+    depends_on:
+      data-perms: {condition: service_completed_successfully}
+      tor: {condition: service_healthy}
+
+  # No `ports:` anywhere in this file: the only way in is the onion service.
+  web:
+    image: ${TUWUNEL_WEB_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel-web:beta}
+    <<: *hardening
+    restart: unless-stopped
+    networks: [backend]
+    entrypoint: ["sh", "-c", "HUGMESH_WEB_PUBLIC_URL=\"http://$$(cat /onion/hostname)\" exec \"$$@\"", "--"]
+    command: ["java", "-jar", "/app/app.jar"]
+    environment:
+      HUGMESH_WEB_HOMESERVER_URL: http://tuwunel:8008
+    volumes:
+      - web-state:/var/lib/hugmesh-web
+      - onion-public:/onion:ro
+    depends_on:
+      tuwunel: {condition: service_started}
+
+networks:
+  # no route off the host: the homeserver and the web service cannot reach the internet, and nothing outside can reach them
+  backend:
+    internal: true
+  # the one network with a route out, joined only by tor
+  egress: {}
+
+volumes:
+  data:
+  web-state:
+  tor-private:
+  onion-public:

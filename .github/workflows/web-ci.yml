@@ -1,0 +1,80 @@
+# Pull-request checks for hugmesh-tuwunel-web (web/): the service's tests, then the image builds and boots.
+# Pushes NOTHING: no registry login, no packages permission, read-only token. Publishing happens only in
+# release-web.yml, which never runs on a pull request.
+name: Web (PR build)
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'compose/**'
+      - 'onion/**'
+      - 'scripts/**'
+      - '.github/workflows/web-ci.yml'
+      - '.github/workflows/release-web.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: unit and integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+          cache-dependency-path: web/pom.xml
+
+      - name: web/VERSION equals the pom version
+        run: bash scripts/check-web-version.sh
+
+      - name: Check the onion stack (compose file valid, nothing published, entrypoint parses)
+        run: |
+          sh -n onion/entrypoint.sh
+          REGISTRATION_TOKEN=x docker compose -f compose/docker-compose.onion.yml config > /tmp/onion.yml
+          if grep -qE '^\s+ports:' /tmp/onion.yml; then echo '::error::the onion stack publishes a port'; exit 1; fi
+          grep -q 'internal: true' /tmp/onion.yml || { echo '::error::the application network is not internal'; exit 1; }
+
+      - name: Test the release-channel rules against both workflows
+        run: |
+          bash scripts/test-release-channel.sh
+          WORKFLOW=.github/workflows/release-web.yml VFILE=web/VERSION TAG_PREFIX=web-v bash scripts/test-release-channel.sh
+
+      - name: Test the service
+        working-directory: web
+        run: ./mvnw -B -ntp verify
+
+  image:
+    name: build and boot-test (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: web
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: hugmesh-tuwunel-web:smoke
+
+      - name: Boot-test the image
+        run: bash web/smoke-test.sh hugmesh-tuwunel-web:smoke

@@ -1,0 +1,61 @@
+# hugmesh-tuwunel on its own: the Tuwunel homeserver + the web front door, nothing else from HugMesh.
+#
+#   cp .env.example .env        # server name, a registration token
+#   docker compose up -d
+#   ./register-user.sh alice     # creates an account with the registration token
+#   open http://localhost:8080   (or your host behind a TLS reverse proxy)
+#
+# Images: ghcr.io/hugmesh/hugmesh-tuwunel (the homeserver) and ghcr.io/hugmesh/hugmesh-tuwunel-web (the web UI, sign-in with a
+# Matrix username and password, and the proxy that keeps users' tokens off the browser). Only the web service is published, on
+# 127.0.0.1; it also answers for the homeserver on the public host (client API for Element and others, federation, well-known), so
+# ONE reverse-proxy rule, everything to the web service, is all a public server needs. The Matrix server name cannot be changed
+# once the server has data: choose it first (it is the part after the colon in @user:server).
+# Same hardening the HugMesh cluster applies: read-only root filesystems, no capabilities, no-new-privileges.
+name: hugmesh-tuwunel
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  # the data volume is created root-owned; hand it to the homeserver's uid 1000
+  perms:
+    image: ${TUWUNEL_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel:beta}
+    user: "0:0"
+    entrypoint: ["chown", "1000:1000", "/var/lib/tuwunel"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    network_mode: none
+    volumes: [data:/var/lib/tuwunel]
+
+  tuwunel:
+    image: ${TUWUNEL_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel:beta}
+    <<: *hardening
+    restart: unless-stopped
+    environment:
+      TUWUNEL_SERVER_NAME: ${MATRIX_SERVER_NAME:?set MATRIX_SERVER_NAME in .env}
+      TUWUNEL_ALLOW_REGISTRATION: "true"
+      TUWUNEL_REGISTRATION_TOKEN: ${REGISTRATION_TOKEN:?set REGISTRATION_TOKEN in .env}
+      TUWUNEL_ALLOW_FEDERATION: ${ALLOW_FEDERATION:-true}
+    volumes: [data:/var/lib/tuwunel]
+    depends_on:
+      perms: {condition: service_completed_successfully}
+
+  web:
+    image: ${TUWUNEL_WEB_IMAGE:-ghcr.io/hugmesh/hugmesh-tuwunel-web:beta}
+    <<: *hardening
+    restart: unless-stopped
+    environment:
+      HUGMESH_WEB_HOMESERVER_URL: http://tuwunel:8008
+      # the address people type; also the base of the cross-site request check
+      HUGMESH_WEB_PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+    ports: ["127.0.0.1:${WEB_PORT:-8080}:8080"]
+    volumes: [web-state:/var/lib/hugmesh-web]
+    depends_on:
+      tuwunel: {condition: service_started}
+
+volumes:
+  data:
+  web-state:

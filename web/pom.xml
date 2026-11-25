@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- Stands on spring-boot-starter-parent directly and depends on nothing from the HugMesh
+       packages, so it builds from Maven Central alone: no registry token, no sibling repository. -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.0.7</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>net.hugmesh</groupId>
+  <artifactId>hugmesh-tuwunel-web</artifactId>
+  <!-- web/VERSION is what the release workflow reads; keep this equal to it
+       (scripts/check-web-version.sh, run in CI, fails when they differ). -->
+  <version>0.5.1-beta.1</version>
+  <name>hugmesh-tuwunel-web</name>
+  <description>Front door for a standalone Tuwunel: serves the Mastodon web UI, signs users in through
+    a Matrix username and password, keeps the token server-side, and proxies the Mastodon API and federation paths.</description>
+
+  <properties>
+    <java.version>25</java.version>
+  </properties>
+
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+    <!-- Jackson 2 databind, used directly to read Akkoma's JSON (the WebFlux codec is Jackson 3 under Boot 4). -->
+    <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webflux-test</artifactId><scope>test</scope></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,81 @@
+# Pull-request build of hugmesh-tuwunel. Builds the image from the same Dockerfile release.yml publishes, natively on each
+# architecture it publishes (ubuntu-latest for amd64, ubuntu-24.04-arm for arm64: the Rust and RocksDB compile is far too slow
+# under emulation), boot-tests each with smoke-test.sh, and pushes NOTHING: no registry login, no packages permission, read-only
+# token. Publishing happens only in release.yml, which never runs on a pull request.
+name: Tuwunel image (PR build)
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'VERSION'
+      - 'config/**'
+      - 'smoke-test.sh'
+      - 'check-upstream-pin.sh'
+      - 'scripts/release-channel.sh'
+      - 'scripts/test-release-channel.sh'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and boot-test (no push, ${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            machine: x86_64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # A runner label that silently lands on the other architecture would build and test the wrong half and pass.
+      - name: Check the runner architecture
+        env:
+          WANT: ${{ matrix.machine }}
+        run: |
+          got="$(uname -m)"
+          if [ "$got" != "$WANT" ]; then
+            echo "::error::runner is $got, expected $WANT"
+            exit 1
+          fi
+
+      - name: Lint the scripts
+        run: |
+          bash -n smoke-test.sh
+          bash -n check-upstream-pin.sh
+
+      - name: Test the release-channel script and the workflow steps that depend on it
+        run: bash scripts/test-release-channel.sh
+
+      - name: Check the upstream tag still names the pinned commit
+        run: bash check-upstream-pin.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: hugmesh-tuwunel:smoke
+
+      - name: Boot-test the image
+        run: bash smoke-test.sh hugmesh-tuwunel:smoke "$(sed -n 's/^ARG TUWUNEL_VERSION=//p' Dockerfile | head -n 1)"
