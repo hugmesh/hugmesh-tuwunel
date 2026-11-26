@@ -31,10 +31,11 @@ FROM --platform=$BUILDPLATFORM ${JDK_IMAGE} AS build
 WORKDIR /src
 COPY mvnw pom.xml ./
 COPY .mvn .mvn
-# Maven Central is fetched over the network on a CI runner: retry a transient failure, and keep the output.
-RUN for i in 1 2 3; do ./mvnw -B -ntp dependency:go-offline && exit 0; echo "dependency fetch failed (attempt $i)"; sleep 10; done; exit 1
+# Maven Central is fetched over the network on a CI runner and rate-limits (HTTP 429) shared runner addresses, so retry with a
+# growing wait (up to ~7 minutes in all), and keep the output.
+RUN for wait in 0 20 60 120 240; do sleep "$wait"; ./mvnw -B -ntp dependency:go-offline && exit 0; echo "dependency fetch failed; backing off"; done; exit 1
 COPY src src
-RUN for i in 1 2 3; do ./mvnw -B -ntp -DskipTests package && break; echo "package failed (attempt $i)"; sleep 10; done \
+RUN for wait in 0 20 60 120; do sleep "$wait"; ./mvnw -B -ntp -DskipTests package && break; echo "package failed; backing off"; done \
  && mv target/hugmesh-tuwunel-web-*.jar /app.jar
 
 # ---- runtime ----------------------------------------------------------------------------------
